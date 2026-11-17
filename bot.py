@@ -35,7 +35,7 @@ PILLARS = {
     "skills": {
         "display": "Skill",
         "points_per_level": 110,
-        "points_per_summon": 5,
+        "points_per_summon": 1,
         "default_cost": 40.0,
         "has_lucky": False,
     },
@@ -193,6 +193,25 @@ def calculate(pillar: str, current_level: int, current_points: int,
     }
 
 
+def reach_with_balance(pillar: str, current_level: int, current_points: int,
+                       summon_cost: float, lucky_percent: float, balance: float):
+    """Meddig jut a játékos a meglévő valutájával (várható értékkel, ha van Lucky)."""
+    rules = PILLARS[pillar]
+    ppl = rules["points_per_level"]
+    pps = rules["points_per_summon"]
+    summons = int(balance // summon_cost)
+    p = (lucky_percent / 100.0) if rules["has_lucky"] else 0.0
+    gained = int(summons * pps * (1.0 + p))
+    total = (current_level - 1) * ppl + current_points + gained
+    max_total = (MAX_LEVEL - 1) * ppl
+    if total >= max_total:
+        return {"summons": summons, "level": MAX_LEVEL, "points": 0, "maxed": True,
+                "leftover": balance - math.ceil((max_total - (current_level - 1) * ppl - current_points)
+                                                / (pps * (1.0 + p))) * summon_cost}
+    return {"summons": summons, "level": total // ppl + 1, "points": total % ppl,
+            "maxed": False, "leftover": balance - summons * summon_cost}
+
+
 def fmt_number(value: float) -> str:
     if abs(value - round(value)) < 1e-9:
         return f"{int(round(value)):,}".replace(",", " ")
@@ -238,7 +257,8 @@ async def on_app_command_error(interaction: discord.Interaction,
 
 async def run_ascension(interaction: discord.Interaction, key: str,
                         current_level: int, current_points: Optional[int],
-                        summon_cost: Optional[float], lucky_percent: Optional[float]):
+                        summon_cost: Optional[float], lucky_percent: Optional[float],
+                        balance: Optional[int] = None):
     rules = PILLARS[key]
     ppl = rules["points_per_level"]
     previous = get_profile(interaction.user.id, key)
@@ -313,6 +333,20 @@ async def run_ascension(interaction: discord.Interaction, key: str,
         ),
         inline=False,
     )
+    if balance is not None:
+        reach = reach_with_balance(key, current_level, points_value, cost_value,
+                                   lucky_value, balance)
+        if reach["maxed"]:
+            reach_text = (f"🎉 Ennyiből eléred a **{MAX_LEVEL}. szintet**, és kb. "
+                          f"**{fmt_number(max(reach['leftover'], 0))}** marad.")
+        else:
+            reach_text = (f"**{fmt_number(reach['summons'])}** idézésre elég, ezzel kb. a "
+                          f"**{reach['level']}. szint {reach['points']}/{ppl}** pontjáig jutsz.")
+        if rules["has_lucky"] and lucky_value > 0:
+            reach_text += "\n_(Lucky-val számolt várható érték.)_"
+        embed.add_field(name=f"Meddig jutsz {fmt_number(balance)}-ből?",
+                        value=reach_text, inline=False)
+
     if rules["has_lucky"]:
         embed.add_field(
             name="Lucky kalkuláció",
@@ -327,7 +361,7 @@ async def run_ascension(interaction: discord.Interaction, key: str,
     else:
         embed.set_footer(text="A profilod automatikusan el lett mentve.")
 
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 ascension_group = app_commands.Group(
@@ -341,14 +375,16 @@ ascension_group = app_commands.Group(
     current_level="A jelenlegi szinted (1–100, a 100 a maximum).",
     current_points="Hány ponton állsz ezen a szinten? Pl. 95, ha 95/110.",
     summon_cost="Egy idézés ára Skill Ticketben (alapból 40, tech fa nélkül).",
+    tickets="Hány Skill Ticketed van? Ebből kiszámolja, meddig jutsz.",
 )
 async def ascension_skill(
     interaction: discord.Interaction,
     current_level: app_commands.Range[int, 1, 100],
     current_points: Optional[app_commands.Range[int, 0, 109]] = None,
     summon_cost: Optional[app_commands.Range[float, 1, 1000000]] = None,
+    tickets: Optional[app_commands.Range[int, 0, 1000000000]] = None,
 ):
-    await run_ascension(interaction, "skills", current_level, current_points, summon_cost, None)
+    await run_ascension(interaction, "skills", current_level, current_points, summon_cost, None, tickets)
 
 
 @ascension_group.command(name="mount", description="Mount fejlesztési költség kalkulálása.")
@@ -357,6 +393,7 @@ async def ascension_skill(
     current_points="Hány ponton állsz ezen a szinten? Pl. 12, ha 12/20.",
     summon_cost="Egy idézés ára Clock Winderben (alapból 50, tech fa nélkül).",
     lucky_percent="Lucky esély százalékban (alapból 0%).",
+    clock_winders="Hány Clock Windered van? Ebből kiszámolja, meddig jutsz.",
 )
 async def ascension_mount(
     interaction: discord.Interaction,
@@ -364,8 +401,9 @@ async def ascension_mount(
     current_points: Optional[app_commands.Range[int, 0, 19]] = None,
     summon_cost: Optional[app_commands.Range[float, 1, 1000000]] = None,
     lucky_percent: Optional[app_commands.Range[float, 0, 100]] = None,
+    clock_winders: Optional[app_commands.Range[int, 0, 1000000000]] = None,
 ):
-    await run_ascension(interaction, "mounts", current_level, current_points, summon_cost, lucky_percent)
+    await run_ascension(interaction, "mounts", current_level, current_points, summon_cost, lucky_percent, clock_winders)
 
 
 @ascension_group.command(name="pet", description="Pet fejlesztési költség kalkulálása (idézés fixen 100 pont).")
@@ -373,14 +411,16 @@ async def ascension_mount(
     current_level="A jelenlegi szinted (1–100, a 100 a maximum).",
     current_points="Hány ponton állsz ezen a szinten? Pl. 15, ha 15/23.",
     lucky_percent="Lucky esély százalékban (alapból 0%).",
+    eggshells="Hány Eggshelled van? Ebből kiszámolja, meddig jutsz.",
 )
 async def ascension_pet(
     interaction: discord.Interaction,
     current_level: app_commands.Range[int, 1, 100],
     current_points: Optional[app_commands.Range[int, 0, 22]] = None,
     lucky_percent: Optional[app_commands.Range[float, 0, 100]] = None,
+    eggshells: Optional[app_commands.Range[int, 0, 1000000000]] = None,
 ):
-    await run_ascension(interaction, "pets", current_level, current_points, None, lucky_percent)
+    await run_ascension(interaction, "pets", current_level, current_points, None, lucky_percent, eggshells)
 
 
 @client.tree.command(name="profil", description="Megmutatja a saját elmentett Forge Master adataidat.")
