@@ -35,8 +35,8 @@ PILLARS = {
     "skills": {
         "display": "Skill",
         "points_per_level": 110,
-        "points_per_summon": 1,
-        "default_cost": 40.0,
+        "points_per_summon": 5,
+        "default_cost": 200.0,
         "has_lucky": False,
     },
     "mounts": {
