@@ -79,4 +79,4 @@ if __name__ == "__main__":
     if not TOKEN:
         print("Hiba: A DISCORD_TOKEN környezeti változó nincs beállítva!")
     else:
-        bot.run(TOKEN)
+        client.run(TOKEN)
